@@ -6,9 +6,20 @@
 #include <Print.h>
 #include <Client.h>
 #include <IPAddress.h>
+#include <avr/pgmspace.h>
 
-#define GSM_BUFFER_SIZE 80
+// Workaround for http://gcc.gnu.org/bugzilla/show_bug.cgi?id=34734
+#ifdef PROGMEM
+#undef PROGMEM
+#define PROGMEM __attribute__((section(".progmem.data")))
+#endif
+
+#define GSM_BUFFER_SIZE 64
+#define GPRS_BUFFER_SIZE 64
 #define MAX_CALLBACK 3
+
+// Functions with name ended with _P should be provided with
+// PROGMEM value for its const char * parameter.
 
 class GSM {
 public:
@@ -19,31 +30,46 @@ public:
 	size_t buf_size;
 
 	GSM();
-	void begin(unsigned long);
+	void begin(unsigned long baud);
 	void end();
 
 	void powerToggle();
 
 	// Send AT command.  Don't use '\r' as command suffix.
-	void send(const char *);
+	void send(const char *cmd);
+	void send_P(const char *cmd);
 
 	// Receive until buffer is full or timeout.
 	size_t recv();
 
 	// Receive until specified token found or timeout.
 	// Returns 1, 2, 3 depending on matched parameter. Or 0 if none found.
-	int recvUntil(const char *, const char * = NULL, const char * = NULL);
-	int recvUntil(int tries, const char *, const char * = NULL, const char * = NULL);
+	int recvUntil_P(const char *s1, const char *s2 = NULL, const char *s3 = NULL);
+	int recvUntil_P(int tries, const char *s1, const char *s2 = NULL, const char *s3 = NULL);
+
+	// Utility functions
+	inline size_t sendRecv_P(const char *cmd) {
+		send_P(cmd);
+		return recv();
+	}
+	inline int sendRecvUntil_P(const char *cmd,
+			const char *s1, const char *s2 = NULL, const char *s3 = NULL) {
+		send_P(cmd);
+		return recvUntil_P(s1, s2, s3);
+	}
+	inline int sendRecvUntil_P(const char *cmd, int tries,
+			const char *s1, const char *s2 = NULL, const char *s3 = NULL) {
+		send_P(cmd);
+		return recvUntil_P(tries, s1, s2, s3);
+	}
 
 	// Set timeout for recv() and recvUntil()
-	void setTimeout(long = 1000, long = 50);
-
-	size_t sendAndRecv(const char *);
-	int sendAndRecvUntil(const char *, const char *, const char * = NULL, const char * = NULL);
+	void setTimeout(long first_time = 1000, long intra_time = 50);
 
 	// Must be called frequently to check incoming data
 	void loop();
-	void setCallback(int slot, const char *match, callback_func func, void *data);
+
+	void setCallback_P(int slot, const char *match, callback_func func, void *data);
 
 	// Modem status testing functions
 	boolean isModemReady();
@@ -71,7 +97,7 @@ private:
 		callback_func func;
 		const char *match;
 		byte length;
-		void * data;
+		void *data;
 	} _cb[MAX_CALLBACK];
 	size_t _overflow_size;
 	byte _overflow_slot;
@@ -109,7 +135,7 @@ private:
 	boolean _in_loop;
 
 	size_t _size_left;
-	byte _rx_buf[128];
+	byte _rx_buf[GPRS_BUFFER_SIZE];
 	byte _rx_head;
 	byte _rx_tail;
 

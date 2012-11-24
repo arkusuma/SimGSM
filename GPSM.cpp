@@ -18,10 +18,13 @@
 
 #define ECHO_ENABLED 1
 
+#define G(s) (const char *)F(s)
+
 enum {
 	CIICR_TIMEOUT   = 10,
-	CONNECT_TIMEOUT = 10,
-	SEND_TIMEOUT    = 30
+	CONNECT_TIMEOUT = 20,
+	SEND_TIMEOUT    = 30,
+	CLOSE_TIMEOUT   = 5
 };
 
 GSM::GSM() :
@@ -66,7 +69,21 @@ void GSM::send(const char *cmd) {
 	write('\r');
 
 #if ECHO_ENABLED
-	console.print(":");
+	console.print(F(":"));
+	console.println(cmd);
+#endif
+}
+
+void GSM::send_P(const char *cmd) {
+	// Cleanup serial buffer
+	while (available())
+		recv();
+
+	Serial.print((__FlashStringHelper *)cmd);
+	write('\r');
+
+#if ECHO_ENABLED
+	console.print(F(":"));
 	console.println(cmd);
 #endif
 }
@@ -82,7 +99,7 @@ void GSM::handleCallback() {
 	while (pos < buf_size) {
 		size_t used = 0;
 		for (i = 0; i < MAX_CALLBACK; i++) {
-			if (_cb[i].func && !strncmp((char *)buf + pos, _cb[i].match, _cb[i].length)) {
+			if (_cb[i].func && !strncmp_P((char *)buf + pos, _cb[i].match, _cb[i].length)) {
 				used = _cb[i].func(buf + pos, buf_size - pos, _cb[i].data);
 				if (used)
 					break;
@@ -124,19 +141,19 @@ size_t GSM::recv() {
 	return buf_size;
 }
 
-int GSM::recvUntil(const char *s1, const char *s2, const char *s3) {
+int GSM::recvUntil_P(const char *s1, const char *s2, const char *s3) {
 	const char *ss[3] = { s1, s2, s3 };
 	recv();
 	for (int i = 0; i < 3; i++)
-		if (ss[i] && strstr((char *)buf, ss[i]) != NULL)
+		if (ss[i] && strstr_P((char *)buf, ss[i]) != NULL)
 			return i + 1;
 	return 0;
 }
 
-int GSM::recvUntil(int tries, const char *s1, const char *s2, const char *s3) {
+int GSM::recvUntil_P(int tries, const char *s1, const char *s2, const char *s3) {
 	int ret = 0;
 	for (int i = 0; i < tries && ret == 0; i++)
-		ret = recvUntil(s1, s2, s3);
+		ret = recvUntil_P(s1, s2, s3);
 	return ret;
 }
 
@@ -145,24 +162,14 @@ void GSM::setTimeout(long first_time, long intra_time) {
 	_intra_time = intra_time;
 }
 
-size_t GSM::sendAndRecv(const char *cmd) {
-	send(cmd);
-	return recv();
-}
-
-int GSM::sendAndRecvUntil(const char *cmd, const char *s1, const char *s2, const char *s3) {
-	send(cmd);
-	return recvUntil(s1, s2, s3);
-}
-
 void GSM::loop() {
 	if (available())
 		recv();
 }
 
-void GSM::setCallback(int slot, const char *match, callback_func func, void *data) {
+void GSM::setCallback_P(int slot, const char *match, callback_func func, void *data) {
 	_cb[slot].match = match;
-	_cb[slot].length = strlen(match);
+	_cb[slot].length = strlen_P((char *)match);
 	_cb[slot].data = data;
 	_cb[slot].func = func;
 }
@@ -170,24 +177,24 @@ void GSM::setCallback(int slot, const char *match, callback_func func, void *dat
 boolean GSM::isModemReady() {
 	boolean ready = false;
 	for (int i = 0; i < 2 && !ready; i++)
-		ready = sendAndRecvUntil("AT", "OK");
+		ready = sendRecvUntil_P(G("AT"), G("OK"));
 	if (ready)
-		sendAndRecv("ATE0");
+		sendRecv_P(G("ATE0"));
 	return ready;
 }
 
 boolean GSM::isRegistered() {
-	return sendAndRecvUntil("AT+CREG?", "+CREG: 0,1");
+	return sendRecvUntil_P(G("AT+CREG?"), G("+CREG: 0,1"));
 }
 
 boolean GSM::isAttached() {
-	return sendAndRecvUntil("AT+CGATT?", "+CGATT: 1");
+	return sendRecvUntil_P(G("AT+CGATT?"), G("+CGATT: 1"));
 }
 
 #define IMEI_LENGTH 14
 
 boolean GSM::getIMEI(char *imei) {
-	if (!sendAndRecvUntil("AT+GSN", "OK"))
+	if (!sendRecvUntil_P(G("AT+GSN"), G("OK")))
 		return false;
 	int len = 0;
 	for (size_t i = 0; i < buf_size && len < IMEI_LENGTH; i++) {
@@ -212,15 +219,18 @@ void GPRSClient::setParams(const char *apn, const char *user, const char *pass) 
 	_user = user;
 	_pass = pass;
 
+	char fmt[25];
 	char cmd[40];
-	snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", _apn);
-	gsm.sendAndRecv(cmd);
-	gsm.sendAndRecv("AT+CIPHEAD=1");
+	strcpy_P(fmt, G("AT+CGDCONT=1,\"IP\",\"%s\""));
+	snprintf(cmd, sizeof(cmd), fmt, _apn);
+	gsm.send(cmd);
+	gsm.recv();
+	gsm.sendRecv_P(G("AT+CIPHEAD=1"));
 }
 
 void GPRSClient::getStatus(char *status, size_t length) {
-	gsm.sendAndRecv("AT+CIPSTATUS");
-	char *p = strstr((char *)gsm.buf, "STATE: ");
+	gsm.sendRecv_P(G("AT+CIPSTATUS"));
+	char *p = strstr_P((char *)gsm.buf, G("STATE: "));
 	if (p == NULL) {
 		status[0] = 0;
 	} else {
@@ -237,62 +247,76 @@ boolean GPRSClient::attach() {
 	if (!gsm.isRegistered() || !gsm.isAttached())
 		return false;
 
-	stop();
-
 	char cmd[80];
 	getStatus(cmd, sizeof(cmd));
-	if (!strcmp(cmd, "IP INITIAL")) {
-		// State 0: IP INITIAL
-		snprintf(cmd, sizeof(cmd), "AT+CSTT=\"%s\",\"%s\",\"%s\"",
-				_apn, _user, _pass);
-		if (!gsm.sendAndRecvUntil(cmd, "OK"))
+
+	// If state in "CONNECT OK", "TCP CONNECTING", "UDP CONNECTING"
+	// We use "CONNECT" as a shortcut to save space
+	if (strstr_P(cmd, G("CONNECT"))) {
+		// We shouldn't be here normally, but this can happen when hot resetting device
+		_connected = true;
+		stop();
+		getStatus(cmd, sizeof(cmd));
+	}
+
+	if (!strcmp_P(cmd, G("IP CLOSE")))
+		return true;
+
+	if (!strcmp_P(cmd, G("PDP DEACT")))
+		gsm.sendRecvUntil_P(G("AT+CIPSHUT"), CLOSE_TIMEOUT, G("SHUT OK"), G("ERROR"));
+
+	// State 0: IP INITIAL
+	if (!strcmp_P(cmd, G("IP INITIAL"))) {
+		char fmt[25];
+		strcpy_P(fmt, G("AT+CSTT=\"%s\",\"%s\",\"%s\""));
+		snprintf(cmd, sizeof(cmd), fmt, _apn, _user, _pass);
+		gsm.send(cmd);
+		if (!gsm.recvUntil_P(G("OK")))
 			return false;
 		getStatus(cmd, sizeof(cmd));
 	}
 
 	// State 1: IP START
-	if (!strcmp(cmd, "IP START")) {
-		gsm.send("AT+CIICR");
-		if (gsm.recvUntil(CIICR_TIMEOUT, "OK", "ERROR") != 1)
+	if (!strcmp_P(cmd, G("IP START"))) {
+		gsm.send_P(G("AT+CIICR"));
+		if (gsm.recvUntil_P(CIICR_TIMEOUT, G("OK"), G("ERROR")) != 1)
 			return false;
 		getStatus(cmd, sizeof(cmd));
 	}
 
 	// State 2: IP CONFIG
-	while (!strcmp(cmd, "IP CONFIG")) {
+	while (!strcmp_P(cmd, G("IP CONFIG"))) {
 		delay(1000);
 		getStatus(cmd, sizeof(cmd));
 	}
 
 	// State 3: IP GPRSACT
-	if (!strcmp(cmd, "IP GPRSACT")) {
-		if (!gsm.sendAndRecvUntil("AT+CIFSR", "."))
+	if (!strcmp_P(cmd, G("IP GPRSACT"))) {
+		if (!gsm.sendRecvUntil_P(G("AT+CIFSR"), G(".")))
 			return false;
 		getStatus(cmd, sizeof(cmd));
 	}
 
-	return !strcmp(cmd, "IP STATUS");
+	return !strcmp_P(cmd, G("IP STATUS"));
 }
 
 int GPRSClient::connect(IPAddress ip, uint16_t port) {
-	if (!attach()) {
-		// Retry once more after shutting down PDP
-		gsm.sendAndRecv("AT+CIPSHUT");
-		if (!attach())
-			return 0;
-	}
+	if (!attach())
+		return 0;
 
 	// State 4: IP STATUS
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"TCP\",\"%d.%d.%d.%d\",\"%d\"",
-			ip[0], ip[1], ip[2], ip[3], port);
-	if (!gsm.sendAndRecvUntil(cmd, "OK"))
+	char fmt[40];
+	strcpy_P(fmt, G("AT+CIPSTART=\"TCP\",\"%d.%d.%d.%d\",\"%d\""));
+	snprintf(cmd, sizeof(cmd), fmt, ip[0], ip[1], ip[2], ip[3], port);
+	gsm.send(cmd);
+	if (!gsm.recvUntil_P(G("OK")))
 		return 0;
 
-	_connected = gsm.recvUntil(CONNECT_TIMEOUT, "CONNECT OK", "CONNECT FAIL") == 1;
+	_connected = gsm.recvUntil_P(CONNECT_TIMEOUT, G("CONNECT OK"), G("CONNECT FAIL")) == 1;
 	if (_connected) {
 		_rx_head = _rx_tail = _size_left = 0;
-		gsm.setCallback(0, "+IPD", callback, (void *)this);
+		gsm.setCallback_P(0, G("+IPD"), callback, (void *)this);
 	}
 
 	return _connected;
@@ -308,14 +332,18 @@ size_t GPRSClient::write(uint8_t b) {
 
 size_t GPRSClient::write(const uint8_t *buf, size_t size) {
 	if (_connected) {
-		char cmd[40];
-		sprintf(cmd, "AT+CIPSEND=%u", size);
-		gsm.sendAndRecvUntil(cmd, "> ");
+		char fmt[20];
+		char cmd[20];
+		strcpy_P(fmt, G("AT+CIPSEND=%u"));
+		snprintf(cmd, sizeof(cmd), fmt, size);
+		gsm.send(cmd);
+		gsm.recvUntil_P(G("> "));
 		gsm.write(buf, size);
 
-		if (gsm.recvUntil(SEND_TIMEOUT, "SEND OK", "SEND FAIL", "ERROR") == 1)
+		if (gsm.recvUntil_P(SEND_TIMEOUT, G("SEND OK"), G("SEND FAIL"), G("ERROR")) == 1)
 			return size;
 
+		console.println(F("failed"));
 		stop();
 	}
 	return 0;
@@ -364,8 +392,8 @@ void GPRSClient::flush() {
 void GPRSClient::stop() {
 	if (_connected) {
 		_connected = 0;
-		gsm.setCallback(0, NULL, NULL, NULL);
-		gsm.sendAndRecv("AT+CIPCLOSE");
+		gsm.setCallback_P(0, NULL, NULL, NULL);
+		gsm.sendRecvUntil_P(G("AT+CIPCLOSE"), CLOSE_TIMEOUT, G("CLOSE OK"), G("ERROR"));
 	}
 }
 
@@ -385,7 +413,7 @@ size_t GPRSClient::callback(byte *buf, size_t length, void *data) {
 	size_t used = 0;
 	GPRSClient *client = (GPRSClient *)data;
 	if (client->_size_left == 0) {
-		char *p = strstr((char *)buf, "+IPD");
+		char *p = strstr_P((char *)buf, G("+IPD"));
 		if (p) {
 			p += 4;
 			char *end = strchr(p, ':');
