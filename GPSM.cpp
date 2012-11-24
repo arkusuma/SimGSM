@@ -16,11 +16,23 @@
 #define CONSOLE_RX_PIN 10
 #define CONSOLE_TX_PIN 11
 
+#define ECHO_ENABLED 1
+
+enum {
+	CIICR_TIMEOUT   = 10,
+	CONNECT_TIMEOUT = 10,
+	SEND_TIMEOUT    = 30
+};
+
 GSM::GSM() :
 	_first_time(1000),
 	_intra_time(50),
-	_callbacks()
-{}
+	_overflow_size(0),
+	_overflow_slot(0)
+{
+	for (int i = 0; i < MAX_CALLBACK; i++)
+		_cb[i].func = NULL;
+}
 
 void GSM::begin(unsigned long baud) {
 	pinMode(GSM_PIN, OUTPUT);
@@ -39,25 +51,6 @@ void GSM::end() {
 	Serial.end();
 }
 
-void GSM::powerUp() {
-	console.println("Checking GSM power status...");
-	boolean ready = isModemReady();
-	if (!ready) {
-		console.println("Powering up GSM...");
-		powerToggle();
-		ready = isModemReady();
-	}
-	// Disable local echo
-	if (ready)
-		sendAndRecv("ATE0");
-	console.println(ready ? "Ready" : "Failed");
-}
-
-void GSM::powerDown() {
-	if (isModemReady())
-		powerToggle();
-}
-
 void GSM::powerToggle() {
 	digitalWrite(PWR_PIN, HIGH);
 	delay(2000);
@@ -67,14 +60,45 @@ void GSM::powerToggle() {
 void GSM::send(const char *cmd) {
 	// Cleanup serial buffer
 	while (available())
-		//read();
-		console.write(read());
+		recv();
 
 	write(cmd);
 	write('\r');
 
+#if ECHO_ENABLED
 	console.print(":");
 	console.println(cmd);
+#endif
+}
+
+void GSM::handleCallback() {
+	// Handle overflow request first
+	size_t pos = 0;
+	int i = _overflow_slot;
+	if (_overflow_size > 0 && _cb[i].func)
+		pos += _cb[i].func(buf, buf_size, _cb[i].data);
+
+	// Handle the rest if we still have available space
+	while (pos < buf_size) {
+		size_t used = 0;
+		for (i = 0; i < MAX_CALLBACK; i++) {
+			if (_cb[i].func && !strncmp((char *)buf + pos, _cb[i].match, _cb[i].length)) {
+				used = _cb[i].func(buf + pos, buf_size - pos, _cb[i].data);
+				if (used)
+					break;
+			}
+		}
+		pos += used ? used : 1;
+	}
+
+	// Callback can request overflow by returning used space
+	// beyond buf space
+	if (pos > buf_size) {
+		_overflow_size = pos - buf_size;
+		_overflow_slot = i;
+	} else {
+		_overflow_size = 0;
+	}
 }
 
 size_t GSM::recv() {
@@ -90,8 +114,13 @@ size_t GSM::recv() {
 		}
 	}
 	buf[buf_size] = 0;
+	handleCallback();
+
+#if ECHO_ENABLED
 	if (buf_size > 0)
 		console.write((byte *) buf, buf_size);
+#endif
+
 	return buf_size;
 }
 
@@ -102,6 +131,13 @@ int GSM::recvUntil(const char *s1, const char *s2, const char *s3) {
 		if (ss[i] && strstr((char *)buf, ss[i]) != NULL)
 			return i + 1;
 	return 0;
+}
+
+int GSM::recvUntil(int tries, const char *s1, const char *s2, const char *s3) {
+	int ret = 0;
+	for (int i = 0; i < tries && ret == 0; i++)
+		ret = recvUntil(s1, s2, s3);
+	return ret;
 }
 
 void GSM::setTimeout(long first_time, long intra_time) {
@@ -120,32 +156,23 @@ int GSM::sendAndRecvUntil(const char *cmd, const char *s1, const char *s2, const
 }
 
 void GSM::loop() {
-	if (_used == 0 && available())
+	if (available())
 		recv();
-
-	size_t sum = 0;
-	for (int i = 0; i < MAX_CALLBACK; i++) {
-		if (_callbacks[i])
-			sum += _callbacks[i](buf + _used + sum,
-					buf_size - _used - sum,
-					_callbacks_data[i]);
-	}
-
-	_used += sum;
-	if (_used >= buf_size || sum == 0)
-		_used = 0;
 }
 
-void GSM::setCallback(int slot, size_t (*callback)(byte *buf, size_t length, void *data), void *data) {
-	_callbacks[slot] = callback;
-	_callbacks_data[slot] = data;
+void GSM::setCallback(int slot, const char *match, callback_func func, void *data) {
+	_cb[slot].match = match;
+	_cb[slot].length = strlen(match);
+	_cb[slot].data = data;
+	_cb[slot].func = func;
 }
 
 boolean GSM::isModemReady() {
 	boolean ready = false;
-	for (int i = 0; i < 2 && !ready; i++) {
+	for (int i = 0; i < 2 && !ready; i++)
 		ready = sendAndRecvUntil("AT", "OK");
-	}
+	if (ready)
+		sendAndRecv("ATE0");
 	return ready;
 }
 
@@ -225,7 +252,8 @@ boolean GPRSClient::attach() {
 
 	// State 1: IP START
 	if (!strcmp(cmd, "IP START")) {
-		if (!gsm.sendAndRecvUntil("AT+CIICR", "OK"))
+		gsm.send("AT+CIICR");
+		if (gsm.recvUntil(CIICR_TIMEOUT, "OK", "ERROR") != 1)
 			return false;
 		getStatus(cmd, sizeof(cmd));
 	}
@@ -261,14 +289,12 @@ int GPRSClient::connect(IPAddress ip, uint16_t port) {
 	if (!gsm.sendAndRecvUntil(cmd, "OK"))
 		return 0;
 
-	for (int i = 0; i < 30; i++) {
-		_connected = gsm.recvUntil("CONNECT OK", "CONNECT FAIL");
-		if (_connected)
-			break;
+	_connected = gsm.recvUntil(CONNECT_TIMEOUT, "CONNECT OK", "CONNECT FAIL") == 1;
+	if (_connected) {
+		_rx_head = _rx_tail = _size_left = 0;
+		gsm.setCallback(0, "+IPD", callback, (void *)this);
 	}
-	_connected = _connected == 1;
-	_rx_head = _rx_tail = _size_left = 0;
-	gsm.setCallback(0, callback, (void *)this);
+
 	return _connected;
 }
 
@@ -283,19 +309,11 @@ size_t GPRSClient::write(uint8_t b) {
 size_t GPRSClient::write(const uint8_t *buf, size_t size) {
 	if (_connected) {
 		char cmd[40];
-		char num[8];
-		strcpy(cmd, "AT+CIPSEND=");
-		strcat(cmd, itoa(size, num, 10));
+		sprintf(cmd, "AT+CIPSEND=%u", size);
 		gsm.sendAndRecvUntil(cmd, "> ");
 		gsm.write(buf, size);
 
-		int ret;
-		for (int i = 0; i < 30; i++) {
-			ret = gsm.recvUntil("SEND OK", "SEND FAIL", "ERROR");
-			if (ret)
-				break;
-		}
-		if (ret == 1)
+		if (gsm.recvUntil(SEND_TIMEOUT, "SEND OK", "SEND FAIL", "ERROR") == 1)
 			return size;
 
 		stop();
@@ -346,7 +364,7 @@ void GPRSClient::flush() {
 void GPRSClient::stop() {
 	if (_connected) {
 		_connected = 0;
-		gsm.setCallback(0, NULL, NULL);
+		gsm.setCallback(0, NULL, NULL, NULL);
 		gsm.sendAndRecv("AT+CIPCLOSE");
 	}
 }
@@ -378,12 +396,15 @@ size_t GPRSClient::callback(byte *buf, size_t length, void *data) {
 			}
 		}
 	}
-	while (client->_size_left > 0 && used < length && !client->isFull()) {
-		client->_rx_buf[client->_rx_tail] = buf[used++];
-		client->_rx_tail = client->nextIndex(client->_rx_tail);
+	while (client->_size_left > 0 && used < length) {
+		// Data will be discarded when buffer is full
+		if (!client->isFull()) {
+			client->_rx_buf[client->_rx_tail] = buf[used++];
+			client->_rx_tail = client->nextIndex(client->_rx_tail);
+		}
 		client->_size_left--;
 	}
-	return used;
+	return used + client->_size_left;
 }
 
 /*

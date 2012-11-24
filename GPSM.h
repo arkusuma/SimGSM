@@ -8,10 +8,12 @@
 #include <IPAddress.h>
 
 #define GSM_BUFFER_SIZE 80
-#define MAX_CALLBACK 4
+#define MAX_CALLBACK 3
 
 class GSM {
 public:
+	typedef size_t (*callback_func)(byte *buf, size_t length, void *data);
+
 	byte buf[GSM_BUFFER_SIZE];
 	byte buf_eol; // dummy EOL for string safety
 	size_t buf_size;
@@ -20,8 +22,7 @@ public:
 	void begin(unsigned long);
 	void end();
 
-	void powerUp();
-	void powerDown();
+	void powerToggle();
 
 	// Send AT command.  Don't use '\r' as command suffix.
 	void send(const char *);
@@ -32,6 +33,7 @@ public:
 	// Receive until specified token found or timeout.
 	// Returns 1, 2, 3 depending on matched parameter. Or 0 if none found.
 	int recvUntil(const char *, const char * = NULL, const char * = NULL);
+	int recvUntil(int tries, const char *, const char * = NULL, const char * = NULL);
 
 	// Set timeout for recv() and recvUntil()
 	void setTimeout(long = 1000, long = 50);
@@ -41,7 +43,7 @@ public:
 
 	// Must be called frequently to check incoming data
 	void loop();
-	void setCallback(int slot, size_t (*callback)(byte *buf, size_t length, void *data), void *data);
+	void setCallback(int slot, const char *match, callback_func func, void *data);
 
 	// Modem status testing functions
 	boolean isModemReady();
@@ -63,13 +65,18 @@ public:
 	inline size_t write(const uint8_t *buffer, size_t size) { return Serial.write(buffer, size); }
 
 private:
-	long _first_time;
-	long _intra_time;
-	size_t (*_callbacks[MAX_CALLBACK])(byte *buf, size_t length, void *data);
-	void *_callbacks_data[MAX_CALLBACK];
-	size_t _used;
+	unsigned long _first_time;
+	unsigned long _intra_time;
+	struct {
+		callback_func func;
+		const char *match;
+		byte length;
+		void * data;
+	} _cb[MAX_CALLBACK];
+	size_t _overflow_size;
+	byte _overflow_slot;
 
-	void powerToggle();
+	void handleCallback();
 };
 
 class GPRSClient: public Client {
@@ -98,7 +105,7 @@ private:
 	const char *_apn;
 	const char *_user;
 	const char *_pass;
-	uint8_t _connected;
+	boolean _connected;
 	boolean _in_loop;
 
 	size_t _size_left;
