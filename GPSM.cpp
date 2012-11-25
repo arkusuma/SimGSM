@@ -84,7 +84,7 @@ void GSM::send_P(const char *cmd) {
 
 #if ECHO_ENABLED
 	console.print(F(":"));
-	console.println(cmd);
+	console.println((__FlashStringHelper *)cmd);
 #endif
 }
 
@@ -131,13 +131,11 @@ size_t GSM::recv() {
 		}
 	}
 	buf[buf_size] = 0;
-	handleCallback();
-
 #if ECHO_ENABLED
 	if (buf_size > 0)
 		console.write((byte *) buf, buf_size);
 #endif
-
+	handleCallback();
 	return buf_size;
 }
 
