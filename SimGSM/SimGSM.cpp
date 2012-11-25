@@ -1,10 +1,10 @@
-#include "GPSM.h"
+#include "SimGSM.h"
 
 #define GSM_PIN 3
 #define GPS_PIN 4
 #define PWR_PIN 5
 
-// GSM RX & TX are connected to Arduino hardware serial (pin 0 & 1),
+// SimGSM RX & TX are connected to Arduino hardware serial (pin 0 & 1),
 // accessible via Serial.
 //
 // #define GSM_RX_PIN 0
@@ -27,7 +27,7 @@ enum {
 	CLOSE_TIMEOUT   = 5
 };
 
-GSM::GSM() :
+SimGSM::SimGSM() :
 	_first_time(1000),
 	_intra_time(50),
 	_overflow_size(0),
@@ -37,7 +37,7 @@ GSM::GSM() :
 		_cb[i].func = NULL;
 }
 
-void GSM::begin(unsigned long baud) {
+void SimGSM::begin(unsigned long baud) {
 	pinMode(GSM_PIN, OUTPUT);
 	pinMode(GPS_PIN, OUTPUT);
 	pinMode(PWR_PIN, OUTPUT);
@@ -48,19 +48,19 @@ void GSM::begin(unsigned long baud) {
 	Serial.begin(baud);
 }
 
-void GSM::end() {
+void SimGSM::end() {
 	digitalWrite(GSM_PIN, HIGH);
 	digitalWrite(GPS_PIN, HIGH);
 	Serial.end();
 }
 
-void GSM::powerToggle() {
+void SimGSM::powerToggle() {
 	digitalWrite(PWR_PIN, HIGH);
 	delay(2000);
 	digitalWrite(PWR_PIN, LOW);
 }
 
-void GSM::send(const char *cmd) {
+void SimGSM::send(const char *cmd) {
 	// Cleanup serial buffer
 	while (available())
 		recv();
@@ -74,7 +74,7 @@ void GSM::send(const char *cmd) {
 #endif
 }
 
-void GSM::send_P(const char *cmd) {
+void SimGSM::send_P(const char *cmd) {
 	// Cleanup serial buffer
 	while (available())
 		recv();
@@ -88,7 +88,7 @@ void GSM::send_P(const char *cmd) {
 #endif
 }
 
-void GSM::handleCallback() {
+void SimGSM::handleCallback() {
 	// Handle overflow request first
 	size_t pos = 0;
 	int i = _overflow_slot;
@@ -118,7 +118,7 @@ void GSM::handleCallback() {
 	}
 }
 
-size_t GSM::recv() {
+size_t SimGSM::recv() {
 	unsigned long timeout = millis() + _first_time;
 	buf_size = 0;
 	while (millis() < timeout) {
@@ -139,7 +139,7 @@ size_t GSM::recv() {
 	return buf_size;
 }
 
-int GSM::recvUntil_P(const char *s1, const char *s2, const char *s3) {
+int SimGSM::recvUntil_P(const char *s1, const char *s2, const char *s3) {
 	const char *ss[3] = { s1, s2, s3 };
 	recv();
 	for (int i = 0; i < 3; i++)
@@ -148,31 +148,31 @@ int GSM::recvUntil_P(const char *s1, const char *s2, const char *s3) {
 	return 0;
 }
 
-int GSM::recvUntil_P(int tries, const char *s1, const char *s2, const char *s3) {
+int SimGSM::recvUntil_P(int tries, const char *s1, const char *s2, const char *s3) {
 	int ret = 0;
 	for (int i = 0; i < tries && ret == 0; i++)
 		ret = recvUntil_P(s1, s2, s3);
 	return ret;
 }
 
-void GSM::setTimeout(long first_time, long intra_time) {
+void SimGSM::setTimeout(long first_time, long intra_time) {
 	_first_time = first_time;
 	_intra_time = intra_time;
 }
 
-void GSM::loop() {
+void SimGSM::loop() {
 	if (available())
 		recv();
 }
 
-void GSM::setCallback_P(int slot, const char *match, callback_func func, void *data) {
+void SimGSM::setCallback_P(int slot, const char *match, callback_func func, void *data) {
 	_cb[slot].match = match;
 	_cb[slot].length = strlen_P((char *)match);
 	_cb[slot].data = data;
 	_cb[slot].func = func;
 }
 
-boolean GSM::isModemReady() {
+boolean SimGSM::isModemReady() {
 	boolean ready = false;
 	for (int i = 0; i < 2 && !ready; i++)
 		ready = sendRecvUntil_P(G("AT"), G("OK"));
@@ -181,17 +181,17 @@ boolean GSM::isModemReady() {
 	return ready;
 }
 
-boolean GSM::isRegistered() {
+boolean SimGSM::isRegistered() {
 	return sendRecvUntil_P(G("AT+CREG?"), G("+CREG: 0,1"));
 }
 
-boolean GSM::isAttached() {
+boolean SimGSM::isAttached() {
 	return sendRecvUntil_P(G("AT+CGATT?"), G("+CGATT: 1"));
 }
 
 #define IMEI_LENGTH 14
 
-boolean GSM::getIMEI(char *imei) {
+boolean SimGSM::getIMEI(char *imei) {
 	if (!sendRecvUntil_P(G("AT+GSN"), G("OK")))
 		return false;
 	int len = 0;
@@ -355,7 +355,7 @@ int GPRSClient::available() {
 	}
 
 	return _rx_tail >= _rx_head ?
-	       	_rx_tail - _rx_head :
+		_rx_tail - _rx_head :
 		_rx_tail - _rx_head + sizeof(_rx_buf);
 }
 
@@ -437,7 +437,7 @@ size_t GPRSClient::callback(byte *buf, size_t length, void *data) {
  * Predefined objects
  */
 
-GSM gsm;
+SimGSM gsm;
 SoftwareSerial gps(GPS_RX_PIN, GPS_TX_PIN);
 SoftwareSerial console(CONSOLE_RX_PIN, CONSOLE_TX_PIN);
 GPRSClient gprsClient;

@@ -21,7 +21,7 @@
 // Functions with name ended with _P should be provided with
 // PROGMEM value for its const char * parameter.
 
-class GSM {
+class SimGSM {
 public:
 	typedef size_t (*callback_func)(byte *buf, size_t length, void *data);
 
@@ -29,7 +29,7 @@ public:
 	byte buf_eol; // dummy EOL for string safety
 	size_t buf_size;
 
-	GSM();
+	SimGSM();
 	void begin(unsigned long baud);
 	void end();
 
@@ -146,7 +146,7 @@ private:
 	inline byte nextIndex(byte i) { return i == sizeof(_rx_buf) - 1 ? 0 : i + 1; }
 };
 
-extern GSM gsm;
+extern SimGSM gsm;
 extern SoftwareSerial gps;
 extern SoftwareSerial console;
 extern GPRSClient gprsClient;
