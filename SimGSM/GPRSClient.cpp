@@ -1,7 +1,7 @@
 #include "GPRSClient.h"
 
 GPRSClient::GPRSClient(SimGSM &gsm) :
-	_gsm(gsm),
+	_gsm(&gsm),
 	_connected(0) {}
 
 void GPRSClient::setParams(const char *apn, const char *user, const char *pass) {
@@ -13,14 +13,14 @@ void GPRSClient::setParams(const char *apn, const char *user, const char *pass) 
 	char cmd[40];
 	strcpy_P(fmt, G("AT+CGDCONT=1,\"IP\",\"%s\""));
 	snprintf(cmd, sizeof(cmd), fmt, _apn);
-	_gsm.send(cmd);
-	_gsm.recv();
-	_gsm.sendRecv_P(G("AT+CIPHEAD=1"));
+	_gsm->send(cmd);
+	_gsm->recv();
+	_gsm->sendRecv_P(G("AT+CIPHEAD=1"));
 }
 
 void GPRSClient::getStatus(char *status, size_t length) {
-	_gsm.sendRecv_P(G("AT+CIPSTATUS"));
-	char *p = _gsm.find_P(G("STATE: "));
+	_gsm->sendRecv_P(G("AT+CIPSTATUS"));
+	char *p = _gsm->find_P(G("STATE: "));
 	if (p == NULL) {
 		status[0] = 0;
 	} else {
@@ -34,7 +34,7 @@ void GPRSClient::getStatus(char *status, size_t length) {
 }
 
 boolean GPRSClient::attach() {
-	if (!_gsm.isRegistered() || !_gsm.isAttached())
+	if (!_gsm->isRegistered() || !_gsm->isAttached())
 		return false;
 
 	char cmd[80];
@@ -53,23 +53,23 @@ boolean GPRSClient::attach() {
 		return true;
 
 	if (!strcmp_P(cmd, G("PDP DEACT")))
-		_gsm.sendRecvUntil_P(G("AT+CIPSHUT"), CLOSE_TIMEOUT, G("SHUT OK"), G("ERROR"));
+		_gsm->sendRecvUntil_P(G("AT+CIPSHUT"), CLOSE_TIMEOUT, G("SHUT OK"), G("ERROR"));
 
 	// State 0: IP INITIAL
 	if (!strcmp_P(cmd, G("IP INITIAL"))) {
 		char fmt[25];
 		strcpy_P(fmt, G("AT+CSTT=\"%s\",\"%s\",\"%s\""));
 		snprintf(cmd, sizeof(cmd), fmt, _apn, _user, _pass);
-		_gsm.send(cmd);
-		if (!_gsm.recvUntil_P(G("OK")))
+		_gsm->send(cmd);
+		if (!_gsm->recvUntil_P(G("OK")))
 			return false;
 		getStatus(cmd, sizeof(cmd));
 	}
 
 	// State 1: IP START
 	if (!strcmp_P(cmd, G("IP START"))) {
-		_gsm.send_P(G("AT+CIICR"));
-		if (_gsm.recvUntil_P(CIICR_TIMEOUT, G("OK"), G("ERROR")) != 1)
+		_gsm->send_P(G("AT+CIICR"));
+		if (_gsm->recvUntil_P(CIICR_TIMEOUT, G("OK"), G("ERROR")) != 1)
 			return false;
 		getStatus(cmd, sizeof(cmd));
 	}
@@ -82,7 +82,7 @@ boolean GPRSClient::attach() {
 
 	// State 3: IP GPRSACT
 	if (!strcmp_P(cmd, G("IP GPRSACT"))) {
-		if (!_gsm.sendRecvUntil_P(G("AT+CIFSR"), G(".")))
+		if (!_gsm->sendRecvUntil_P(G("AT+CIFSR"), G(".")))
 			return false;
 		getStatus(cmd, sizeof(cmd));
 	}
@@ -90,30 +90,59 @@ boolean GPRSClient::attach() {
 	return !strcmp_P(cmd, G("IP STATUS"));
 }
 
-int GPRSClient::connect(IPAddress ip, uint16_t port) {
-	if (!attach())
-		return 0;
-
-	// State 4: IP STATUS
-	char cmd[80];
-	char fmt[40];
-	strcpy_P(fmt, G("AT+CIPSTART=\"TCP\",\"%d.%d.%d.%d\",\"%d\""));
-	snprintf(cmd, sizeof(cmd), fmt, ip[0], ip[1], ip[2], ip[3], port);
-	_gsm.send(cmd);
-	if (!_gsm.recvUntil_P(G("OK")))
-		return 0;
-
-	_connected = _gsm.recvUntil_P(CONNECT_TIMEOUT, G("CONNECT OK"), G("CONNECT FAIL")) == 1;
-	if (_connected) {
-		_rx_head = _rx_tail = _size_left = 0;
-		_gsm.setCallback_P(0, G("+IPD"), callback, (void *)this);
+boolean GPRSClient::isIPAddress(const char *ip) {
+	int dot = 0;
+	int len = 0;
+	for (int i = 0; ip[i]; i++) {
+		if (ip[i] == '.') {
+			if (len == 0)
+				return false;
+			len = 0;
+			dot++;
+		} else if (ip[i] >= '0' && ip[i] <= '9') {
+			len++;
+		} else {
+			return false;
+		}
 	}
+	return dot == 3 && len;
+}
 
-	return _connected;
+int GPRSClient::connect(IPAddress ip, uint16_t port) {
+	char buf[16];
+	char fmt[12];
+	strcpy_P(fmt, G("%d.%d.%d.%d"));
+	snprintf(buf, sizeof(buf), fmt, ip[0], ip[1], ip[2], ip[3]);
+	return connect(buf, port);
+
 }
 
 int GPRSClient::connect(const char *host, uint16_t port) {
-	return false;
+	if (!attach())
+		return 0;
+
+	char cmd[80];
+	char fmt[30];
+	strcpy_P(fmt, G("AT+CDNSORIP=%d"));
+	snprintf(cmd, sizeof(cmd), fmt, isIPAddress(host) ? 0 : 1);
+	_gsm->send(cmd);
+	if (!_gsm->recvUntil_P(G("OK")))
+		return 0;
+
+	// State 4: IP STATUS
+	strcpy_P(fmt, G("AT+CIPSTART=\"TCP\",\"%s\",\"%d\""));
+	snprintf(cmd, sizeof(cmd), fmt, host, port);
+	_gsm->send(cmd);
+	if (!_gsm->recvUntil_P(G("OK")))
+		return 0;
+
+	_connected = _gsm->recvUntil_P(CONNECT_TIMEOUT, G("CONNECT OK"), G("CONNECT FAIL")) == 1;
+	if (_connected) {
+		_rx_head = _rx_tail = _size_left = 0;
+		_gsm->setCallback_P(0, G("+IPD"), callback, (void *)this);
+	}
+
+	return _connected;
 }
 
 size_t GPRSClient::write(uint8_t b) {
@@ -126,14 +155,13 @@ size_t GPRSClient::write(const uint8_t *buf, size_t size) {
 		char cmd[20];
 		strcpy_P(fmt, G("AT+CIPSEND=%u"));
 		snprintf(cmd, sizeof(cmd), fmt, size);
-		_gsm.send(cmd);
-		_gsm.recvUntil_P(G("> "));
-		_gsm.serial().write(buf, size);
+		_gsm->send(cmd);
+		_gsm->recvUntil_P(G("> "));
+		_gsm->serial().write(buf, size);
 
-		if (_gsm.recvUntil_P(SEND_TIMEOUT, G("SEND OK"), G("SEND FAIL"), G("ERROR")) == 1)
+		if (_gsm->recvUntil_P(SEND_TIMEOUT, G("SEND OK"), G("SEND FAIL"), G("ERROR")) == 1)
 			return size;
 
-		console.println(F("failed"));
 		stop();
 	}
 	return 0;
@@ -142,7 +170,7 @@ size_t GPRSClient::write(const uint8_t *buf, size_t size) {
 int GPRSClient::available() {
 	if (!_in_loop) {
 		_in_loop = 1;
-		_gsm.loop();
+		_gsm->loop();
 		_in_loop = 0;
 	}
 
@@ -182,8 +210,8 @@ void GPRSClient::flush() {
 void GPRSClient::stop() {
 	if (_connected) {
 		_connected = 0;
-		_gsm.setCallback_P(0, NULL, NULL, NULL);
-		_gsm.sendRecvUntil_P(G("AT+CIPCLOSE"), CLOSE_TIMEOUT, G("CLOSE OK"), G("ERROR"));
+		_gsm->setCallback_P(0, NULL, NULL, NULL);
+		_gsm->sendRecvUntil_P(G("AT+CIPCLOSE"), CLOSE_TIMEOUT, G("CLOSE OK"), G("ERROR"));
 	}
 }
 

@@ -1,7 +1,7 @@
 #include "SimGSM.h"
 
 SimGSM::SimGSM(HardwareSerial &serial) :
-	_serial(serial),
+	_serial(&serial),
 	_first_time(1000),
 	_intra_time(50),
 	_overflow_size(0),
@@ -13,13 +13,11 @@ void SimGSM::begin(unsigned long baud) {
 	pinMode(GPS_PIN, OUTPUT);
 	pinMode(PWR_PIN, OUTPUT);
 
-	serialMode(GSM_MODE);
-	_serial.begin(baud);
+	_serial->begin(baud);
 }
 
 void SimGSM::end() {
-	serialMode(EXT_MODE);
-	_serial.end();
+	_serial->end();
 }
 
 void SimGSM::powerToggle() {
@@ -30,11 +28,11 @@ void SimGSM::powerToggle() {
 
 void SimGSM::send(const char *cmd) {
 	// Cleanup serial buffer
-	while (_serial.available())
+	while (_serial->available())
 		recv();
 
-	_serial.write(cmd);
-	_serial.write('\r');
+	_serial->write(cmd);
+	_serial->write('\r');
 
 #ifdef ECHO_ENABLED
 	console.print(F(":"));
@@ -44,11 +42,11 @@ void SimGSM::send(const char *cmd) {
 
 void SimGSM::send_P(const char *cmd) {
 	// Cleanup serial buffer
-	while (_serial.available())
+	while (_serial->available())
 		recv();
 
-	_serial.print((__FlashStringHelper *)cmd);
-	_serial.write('\r');
+	_serial->print((__FlashStringHelper *)cmd);
+	_serial->write('\r');
 
 #ifdef ECHO_ENABLED
 	console.print(F(":"));
@@ -90,8 +88,8 @@ size_t SimGSM::recv() {
 	unsigned long timeout = millis() + _first_time;
 	_buf_size = 0;
 	while (millis() < timeout) {
-		if (_serial.available()) {
-			_buf[_buf_size++] = _serial.read();
+		if (_serial->available()) {
+			_buf[_buf_size++] = _serial->read();
 			if (_intra_time > 0)
 				timeout = millis() + _intra_time;
 			if (_buf_size >= GSM_BUFFER_SIZE)
@@ -133,7 +131,7 @@ void SimGSM::setTimeout(long first_time, long intra_time) {
 }
 
 void SimGSM::loop() {
-	if (_serial.available())
+	if (_serial->available())
 		recv();
 }
 
@@ -181,7 +179,3 @@ boolean SimGSM::getIMEI(char *imei) {
 	imei[len] = 0;
 	return true;
 }
-
-#ifdef CONSOLE_ENABLED
-SoftwareSerial console(CONSOLE_RX_PIN, CONSOLE_TX_PIN);
-#endif

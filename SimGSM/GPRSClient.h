@@ -32,8 +32,10 @@ public:
 	virtual operator bool();
 	using Print::write;
 
+	static boolean isIPAddress(const char *ip);
+
 private:
-	SimGSM &_gsm;
+	SimGSM *_gsm;
 	const char *_apn;
 	const char *_user;
 	const char *_pass;

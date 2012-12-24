@@ -25,16 +25,9 @@
 #define GSM_BUFFER_SIZE 64
 #define GSM_MAX_CALLBACK 3
 
-// Console is separte serial for outputting debugging message
-#define CONSOLE_ENABLED
-#define CONSOLE_RX_PIN 10
-#define CONSOLE_TX_PIN 11
-
-#define ECHO_ENABLED
-
-// Sanity check
-#if defined(ECHO_ENABLED) && !defined(CONSOLE_ENABLED)
-#undef ECHO_ENABLED
+//#define ECHO_ENABLED
+#ifdef ECHO_ENABLED
+extern HardwareSerial &console;
 #endif
 
 // Workaround for http://gcc.gnu.org/bugzilla/show_bug.cgi?id=34734
@@ -46,6 +39,8 @@
 // Arduino F() macro will create PROGMEM string of type (const __FlashStringHelper *).
 // This G() macro will cast it into (const char *) for use with C library.
 #define G(s) (const char *)F(s)
+
+enum { EXT_MODE, GSM_MODE, GPS_MODE };
 
 // Functions with name ended with _P should be provided with
 // PROGMEM value for its const char * parameter.
@@ -97,7 +92,6 @@ public:
 	typedef size_t (*callback_func)(byte *buf, size_t length, void *data);
 	void setCallback_P(int slot, const char *match, callback_func func, void *data);
 
-	enum { EXT_MODE, GSM_MODE, GPS_MODE };
 	void serialMode(int mode);
 
 	// Modem status testing functions
@@ -106,10 +100,10 @@ public:
 	boolean isAttached();
 	boolean getIMEI(char *buf);
 
-	inline HardwareSerial &serial() { return _serial; }
+	inline HardwareSerial &serial() { return *_serial; }
 
 private:
-	HardwareSerial &_serial;
+	HardwareSerial *_serial;
 	byte _buf[GSM_BUFFER_SIZE];
 	byte _buf_eol; // dummy EOL for string safety
 	size_t _buf_size;
@@ -127,9 +121,5 @@ private:
 
 	void handleCallback();
 };
-
-#ifdef CONSOLE_ENABLED
-extern SoftwareSerial console;
-#endif
 
 #endif
